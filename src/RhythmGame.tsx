@@ -1,10 +1,17 @@
 import styled from "@emotion/styled";
 import { keyframes } from "@emotion/react";
-import React, { useState, useEffect, useRef } from "react";
-import { Music, Play, Volume2, Trophy, RotateCcw } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Music, Play, Trophy, RotateCcw } from "lucide-react";
 import * as Tone from "tone";
 import GameHeader from "./GameHeader";
 import NoteContainer from "./Notecontainer";
+import { useSerialInput } from "./Serial";
+
+interface LaneProps {
+  bgColor: string;
+  borderColor: string;
+  effect: LaneEffect; // "hit" | "miss" | null
+}
 
 interface PatternCollection {
   simple: number[][];
@@ -16,6 +23,10 @@ interface Note {
   lane: number;
   position: number;
   hit: boolean;
+}
+interface DifficultyButtonProps {
+  active: boolean;
+  // 필요한 경우 onClick 등의 다른 prop도 여기에 포함시킬 수 있습니다.
 }
 interface DifficultySetting {
   speed: number;
@@ -33,17 +44,23 @@ type DifficultyLevel = keyof DifficultySettings;
 type HitQuality = "good" | "great" | "perfect";
 
 const RhythmGame = () => {
+  const {
+    latestParsedObject, // parsedObjects → latestParsedObject
+    connect,
+    disconnect,
+  } = useSerialInput();
+
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [notes, setNotes] = useState<Note[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [gameStarted, setGameStarted] = useState(false);
+  const [_gameStarted, setGameStarted] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [noteId, setNoteId] = useState(0);
   const [difficulty, setDifficulty] = useState<DifficultyLevel>("normal");
   const [highScores, setHighScores] = useState({ easy: 0, normal: 0, hard: 0 });
   const [showMenu, setShowMenu] = useState(true);
-  const [currentBeat, setCurrentBeat] = useState(0);
+  const [_currentBeat, setCurrentBeat] = useState(0);
   const [gameTime, setGameTime] = useState(0);
   const [laneEffects, setLaneEffects] = useState<LaneEffect[]>([
     null,
@@ -54,9 +71,9 @@ const RhythmGame = () => {
   const gameAreaRef = useRef(null);
   const synthRef = useRef<Tone.PolySynth | null>(null);
   const drumRef = useRef<Tone.MembraneSynth | null>(null);
+  const [lastButtonStates, setLastButtonStates] = useState([0, 0, 0, 0]);
 
   const lanes = [0, 1, 2, 3];
-  const keys = ["d", "f", "j", "k"];
 
   const difficultySettings: DifficultySettings = {
     easy: { speed: 1.5, interval: 1200, pattern: "simple" },
@@ -160,70 +177,81 @@ const RhythmGame = () => {
     }, 300);
   };
 
-  const checkHit = (laneIndex: number) => {
-    const hitZone = [80, 100];
-    let bestNote: Note | null = null;
-    let bestDistance = Infinity;
+  const checkHit = useCallback(
+    (laneIndex: number) => {
+      const hitZone = [80, 100];
+      let bestNote: Note | null = null;
+      let bestDistance = Infinity;
 
-    notes.forEach((note) => {
-      if (note.lane === laneIndex && !note.hit) {
-        const distance = Math.abs(note.position - 90);
-        if (note.position >= hitZone[0] && note.position <= hitZone[1]) {
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestNote = note;
+      notes.forEach((note) => {
+        if (note.lane === laneIndex && !note.hit) {
+          const distance = Math.abs(note.position - 90);
+          if (note.position >= hitZone[0] && note.position <= hitZone[1]) {
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestNote = note;
+            }
           }
         }
-      }
-    });
+      });
 
-    if (bestNote) {
-      setNotes((prev) => prev.filter((n) => n.id !== bestNote.id));
+      if (bestNote) {
+        setNotes((prev) => prev.filter((n) => n.id !== bestNote?.id));
 
-      let points = 0;
-      let feedbackText = "";
-      let quality: HitQuality = "good";
+        let points = 0;
+        let feedbackText = "";
+        let quality: HitQuality = "good";
 
-      if (bestDistance < 4) {
-        points = 100;
-        feedbackText = "PERFECT!";
-        quality = "perfect";
-      } else if (bestDistance < 7) {
-        points = 50;
-        feedbackText = "GREAT!";
-        quality = "great";
+        if (bestDistance < 4) {
+          points = 100;
+          feedbackText = "PERFECT!";
+          quality = "perfect";
+        } else if (bestDistance < 7) {
+          points = 50;
+          feedbackText = "GREAT!";
+          quality = "great";
+        } else {
+          points = 25;
+          feedbackText = "GOOD";
+        }
+
+        playHitSound(quality);
+        triggerLaneEffect(laneIndex, true);
+        setScore((prev) => prev + points + combo * 5);
+        setCombo((prev) => prev + 1);
+        setFeedback(feedbackText);
+        setTimeout(() => setFeedback(""), 300);
       } else {
-        points = 25;
-        feedbackText = "GOOD";
+        triggerLaneEffect(laneIndex, false);
+        setCombo(0);
+        setFeedback("MISS");
+        setTimeout(() => setFeedback(""), 300);
       }
-
-      playHitSound(quality);
-      triggerLaneEffect(laneIndex, true);
-      setScore((prev) => prev + points + combo * 5);
-      setCombo((prev) => prev + 1);
-      setFeedback(feedbackText);
-      setTimeout(() => setFeedback(""), 300);
-    } else {
-      triggerLaneEffect(laneIndex, false);
-      setCombo(0);
-      setFeedback("MISS");
-      setTimeout(() => setFeedback(""), 300);
-    }
-  };
+    },
+    [notes, setNotes, score, setScore, combo, setCombo]
+  );
 
   useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (!isPlaying) return;
+    if (!isPlaying || !latestParsedObject) return; // null 체크
 
-      const keyIndex = keys.indexOf(e.key.toLowerCase());
-      if (keyIndex !== -1) {
-        checkHit(keyIndex);
+    const latestData = latestParsedObject.data;
+    console.log("최신 데이터:", latestData);
+
+    for (let k = 0; k < 4; k++) {
+      // 0 → 1 변화 감지 (버튼 누르는 순간만)
+      if (latestData[k] == 1 && lastButtonStates[k] == 0) {
+        console.log(`레인 ${k} 입력!`);
+        checkHit(k);
       }
-    };
+    }
 
-    window.addEventListener("keydown", handleKeyPress);
-    return () => window.removeEventListener("keydown", handleKeyPress);
-  }, [notes, isPlaying, combo]);
+    setLastButtonStates([
+      latestData[0] || 0,
+      latestData[1] || 0,
+      latestData[2] || 0,
+      latestData[3] || 0,
+    ]);
+  }, [latestParsedObject, isPlaying, checkHit, lastButtonStates]); // 의존성 간단해짐
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -246,7 +274,7 @@ const RhythmGame = () => {
       clearInterval(updateInterval);
       clearInterval(timeInterval);
     };
-  }, [isPlaying, noteId]);
+  }, [isPlaying]); // noteId 제거!
 
   const startGame = async () => {
     await Tone.start();
@@ -264,7 +292,7 @@ const RhythmGame = () => {
     setIsPlaying(!isPlaying);
   };
 
-  const endGame = () => {
+  const endGame = useCallback(() => {
     setIsPlaying(false);
 
     if (score > highScores[difficulty]) {
@@ -276,7 +304,15 @@ const RhythmGame = () => {
 
     setShowMenu(true);
     setGameStarted(false);
-  };
+  }, [
+    score,
+    highScores,
+    difficulty,
+    setHighScores,
+    setShowMenu,
+    setGameStarted,
+    setIsPlaying, // endGame이 사용하는 모든 state/setter를 포함
+  ]);
 
   const resetGame = () => {
     setScore(0);
@@ -290,10 +326,11 @@ const RhythmGame = () => {
   };
 
   useEffect(() => {
-    if (gameTime >= 60 && isPlaying) {
+    console.log(gameTime);
+    if (gameTime >= 5) {
       endGame();
     }
-  }, [gameTime]);
+  }, [gameTime, endGame]);
 
   if (showMenu) {
     return (
@@ -320,7 +357,7 @@ const RhythmGame = () => {
               {["easy", "normal", "hard"].map((diff) => (
                 <DifficultyButton
                   key={diff}
-                  onClick={() => setDifficulty(diff)}
+                  onClick={() => setDifficulty(diff as DifficultyLevel)}
                   active={difficulty === diff}
                 >
                   <div
@@ -338,16 +375,21 @@ const RhythmGame = () => {
                         : "어려움"}
                     </span>
                     <span style={{ fontSize: "0.875rem" }}>
-                      최고: {highScores[diff]}
+                      최고: {highScores[diff as DifficultyLevel]}
                     </span>
                   </div>
                 </DifficultyButton>
               ))}
+              <button onClick={() => connect(115200)}>
+                시리얼 연결 (115200 baud)
+              </button>
+
+              <button onClick={disconnect}>연결 해제</button>
             </div>
           </div>
 
           <StartButton onClick={startGame}>
-            <Play/>
+            <Play />
             게임 시작
           </StartButton>
         </MenuCard>
@@ -405,16 +447,18 @@ const RhythmGame = () => {
                   </GridLines>
                   {notes
                     .filter((note) => note.lane === lane)
-                    .map((note) => (
+                    .map((note, index+++
+                      
+                    ) => (
                       <NoteContainer
-                        key={note.id}
+                        key={`${note.id}-${lane}-${index}`}
                         note={note}
                         board={laneBorders[lane]}
-                      >
-                      </NoteContainer>
+                      ></NoteContainer>
                     ))}
                 </Lane>
-              );
+              );+++
+              
             })}
           </Lane3DContainer>
           <HitZone />
@@ -484,7 +528,7 @@ const DifficultyTitle = styled.h2`
   gap: 0.5rem;
 `;
 
-const DifficultyButton = styled.button`
+const DifficultyButton = styled.button<DifficultyButtonProps>`
   width: 100%;
   padding: 1rem;
   border-radius: 0.75rem;
@@ -531,13 +575,6 @@ const StartButton = styled.button`
   &:hover {
     background-image: linear-gradient(to right, #b45309, #c2410c);
   }
-`;
-
-const SoundInfo = styled.div`
-  margin-top: 1.5rem;
-  text-align: center;
-  color: #fde68a;
-  font-size: 0.875rem;
 `;
 
 // --- Game Screen ---
@@ -597,7 +634,7 @@ const Lane3DContainer = styled.div`
   transform-style: preserve-3d;
 `;
 
-const Lane = styled.div`
+const Lane = styled.div<LaneProps>`
   position: relative;
   transition: all 0.2s ease-in-out;
   width: 120px;
@@ -625,8 +662,6 @@ const GridLine = styled.div`
   border-top-width: 1px;
   opacity: 0.2;
 `;
-
-
 
 const Note = styled.div`
   height: 4rem;

@@ -8,6 +8,11 @@ interface ReceivedDataItem {
   sent?: boolean;
 }
 
+interface ParsedObject {
+  timestamp: string;
+  data: Record<string, any>;
+}
+
 const Container = styled.div`
   min-height: 100vh;
   background: linear-gradient(to bottom right, #eff6ff, #e0e7ff);
@@ -25,6 +30,7 @@ const Card = styled.div`
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1),
     0 10px 10px -5px rgba(0, 0, 0, 0.04);
   padding: 2rem;
+  margin-bottom: 1.5rem;
 `;
 
 const Title = styled.h1`
@@ -227,15 +233,116 @@ const NoticeText = styled.p`
   margin: 0;
 `;
 
+const ParsedDataSection = styled.div`
+  margin-top: 1.5rem;
+`;
+
+const ParsedObjectCard = styled.div`
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+`;
+
+const ParsedHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+`;
+
+const ParsedTitle = styled.h3`
+  font-size: 1rem;
+  font-weight: 600;
+  color: #166534;
+  margin: 0;
+`;
+
+const ParsedTimestamp = styled.span`
+  font-size: 0.75rem;
+  color: #6b7280;
+`;
+
+const KeyValueGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+`;
+
+const KeyValuePair = styled.div`
+  background: white;
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+  border: 1px solid #d1fae5;
+`;
+
+const Key = styled.div`
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #059669;
+  margin-bottom: 0.25rem;
+`;
+
+const Value = styled.div`
+  font-size: 0.875rem;
+  color: #374151;
+  font-family: "Courier New", monospace;
+`;
+
 export default function SerialComponent() {
   const [port, setPort] = useState<SerialPort | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [receivedData, setReceivedData] = useState<ReceivedDataItem[]>([]);
   const [inputText, setInputText] = useState<string>("");
   const [baudRate, setBaudRate] = useState<number>(115200);
+  const [parsedObjects, setParsedObjects] = useState<ParsedObject[]>([]);
+
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(
     null
   );
+  const parserRef = useRef({
+    buffer: "",
+    braceCount: 0,
+  });
+
+  // JSON 파싱 함수
+  const processStreamChunk = useCallback((chunk: string) => {
+    // 타임스탬프 패턴 제거 (예: [오후 2:56:37])
+    const cleaned = chunk.replace(/\[.*?\]\s*/g, "");
+
+    const parser = parserRef.current;
+
+    for (let char of cleaned) {
+      if (char === "{") {
+        parser.braceCount++;
+        parser.buffer += char;
+      } else if (char === "}") {
+        parser.buffer += char;
+        parser.braceCount--;
+
+        if (parser.braceCount === 0 && parser.buffer) {
+          try {
+            // 불완전한 JSON 수정 시도
+            let fixed = parser.buffer.trim();
+            if (!fixed.startsWith("{")) {
+              fixed = "{" + fixed;
+            }
+
+            const obj = JSON.parse(fixed);
+            const timestamp = new Date().toLocaleTimeString();
+
+            setParsedObjects((prev) => [...prev, { timestamp, data: obj }]);
+          } catch (e) {
+            console.error("JSON 파싱 에러:", e, "Buffer:", parser.buffer);
+          }
+          parser.buffer = "";
+        }
+      } else if (parser.braceCount > 0) {
+        parser.buffer += char;
+      }
+    }
+  }, []);
 
   // 연결
   const connectSerial = async (): Promise<void> => {
@@ -276,6 +383,9 @@ export default function SerialComponent() {
         const timestamp = new Date().toLocaleTimeString();
 
         setReceivedData((prev) => [...prev, { time: timestamp, data: text }]);
+
+        // JSON 파싱 시도
+        processStreamChunk(text);
       }
     } catch (error) {
       console.error("읽기 오류:", error);
@@ -431,6 +541,38 @@ export default function SerialComponent() {
             </NoticeText>
           </Notice>
         </Card>
+
+        {/* 파싱된 데이터 표시 */}
+        {parsedObjects.length > 0 && (
+          <Card>
+            <DataHeader>
+              <Title style={{ marginBottom: 0 }}>파싱된 JSON 데이터</Title>
+              <ClearButton onClick={() => setParsedObjects([])}>
+                초기화
+              </ClearButton>
+            </DataHeader>
+
+            <ParsedDataSection>
+              {parsedObjects.map((item, index) => (
+                <ParsedObjectCard key={index}>
+                  <ParsedHeader>
+                    <ParsedTitle>객체 #{index + 1}</ParsedTitle>
+                    <ParsedTimestamp>{item.timestamp}</ParsedTimestamp>
+                  </ParsedHeader>
+
+                  <KeyValueGrid>
+                    {Object.entries(item.data).map(([key, value]) => (
+                      <KeyValuePair key={key}>
+                        <Key>키 "{key}"</Key>
+                        <Value>{JSON.stringify(value)}</Value>
+                      </KeyValuePair>
+                    ))}
+                  </KeyValueGrid>
+                </ParsedObjectCard>
+              ))}
+            </ParsedDataSection>
+          </Card>
+        )}
       </Content>
     </Container>
   );
