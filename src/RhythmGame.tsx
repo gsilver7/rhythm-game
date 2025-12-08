@@ -447,9 +447,7 @@ const RhythmGame = () => {
                   </GridLines>
                   {notes
                     .filter((note) => note.lane === lane)
-                    .map((note, index+++
-                      
-                    ) => (
+                    .map((note, index) => (
                       <NoteContainer
                         key={`${note.id}-${lane}-${index}`}
                         note={note}
@@ -457,8 +455,7 @@ const RhythmGame = () => {
                       ></NoteContainer>
                     ))}
                 </Lane>
-              );+++
-              
+              );
             })}
           </Lane3DContainer>
           <HitZone />
