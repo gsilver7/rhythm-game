@@ -62,6 +62,7 @@ const RhythmGame = () => {
   const [showMenu, setShowMenu] = useState(true);
   const [_currentBeat, setCurrentBeat] = useState(0);
   const [gameTime, setGameTime] = useState(0);
+  const [showResults, setShowResults] = useState(false);
   const [laneEffects, setLaneEffects] = useState<LaneEffect[]>([
     null,
     null,
@@ -302,17 +303,9 @@ const RhythmGame = () => {
       }));
     }
 
-    setShowMenu(true);
+    setShowResults(true); // 메뉴 대신 결과창 표시
     setGameStarted(false);
-  }, [
-    score,
-    highScores,
-    difficulty,
-    setHighScores,
-    setShowMenu,
-    setGameStarted,
-    setIsPlaying, // endGame이 사용하는 모든 state/setter를 포함
-  ]);
+  }, [score, highScores, difficulty, setHighScores, setIsPlaying]);
 
   const resetGame = () => {
     setScore(0);
@@ -327,7 +320,7 @@ const RhythmGame = () => {
 
   useEffect(() => {
     console.log(gameTime);
-    if (gameTime >= 5) {
+    if (gameTime >= 15) {
       endGame();
     }
   }, [gameTime, endGame]);
@@ -391,6 +384,85 @@ const RhythmGame = () => {
           <StartButton onClick={startGame}>
             <Play />
             게임 시작
+          </StartButton>
+        </MenuCard>
+      </MenuContainer>
+    );
+  }
+  if (showResults) {
+    return (
+      <MenuContainer>
+        <MenuCard>
+          <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+            <Trophy
+              style={{
+                width: "4rem",
+                height: "4rem",
+                color: "#fbbf24",
+                margin: "0 auto 1rem",
+                filter: "drop-shadow(0 0 10px rgba(251, 191, 36, 0.8))",
+              }}
+            />
+            <MenuTitle>게임 종료!</MenuTitle>
+          </div>
+
+          <div
+            style={{
+              backgroundColor: "rgba(251, 191, 36, 0.1)",
+              borderRadius: "1rem",
+              padding: "1.5rem",
+              marginBottom: "2rem",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "1.5rem",
+                color: "#fde68a",
+                marginBottom: "0.5rem",
+              }}
+            >
+              최종 점수
+            </div>
+            <div
+              style={{
+                fontSize: "3rem",
+                fontWeight: "700",
+                color: "white",
+                textShadow: "0 0 20px rgba(251, 191, 36, 0.6)",
+              }}
+            >
+              {score}
+            </div>
+            <div
+              style={{
+                fontSize: "1.25rem",
+                color: "#fde68a",
+                marginTop: "1rem",
+              }}
+            >
+              최고 콤보: {combo}
+            </div>
+            {score > highScores[difficulty] && (
+              <div
+                style={{
+                  color: "#fbbf24",
+                  fontWeight: "700",
+                  marginTop: "1rem",
+                  fontSize: "1.125rem",
+                }}
+              >
+                🎉 신기록 달성!
+              </div>
+            )}
+          </div>
+
+          <StartButton
+            onClick={() => {
+              setShowResults(false);
+              setShowMenu(true);
+            }}
+          >
+            확인
           </StartButton>
         </MenuCard>
       </MenuContainer>
